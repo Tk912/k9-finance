@@ -78,9 +78,49 @@ function addExpense_(sh, dateText, pay, desc, amount, cat) {
     row = Math.max(EXP_FIRST_ROW, totalRow - 1);
     sh.getRange(row, 1, 1, 6).insertCells(SpreadsheetApp.Dimension.ROWS);
   }
+  copyCategoryFormat_(sh, row, cat);
   sh.getRange(row, 1).setNumberFormat("@");
   sh.getRange(row, 1, 1, 6).setValues([[dateText, pay, "לא", desc, amount, cat]]);
   return row;
+}
+
+/**
+ * מעתיק את העיצוב (צבע רקע, גופן, מסגרות) לשורה החדשה משורה קיימת עם אותו סיווג:
+ * קודם בלשונית הנוכחית, ואם אין - בלשוניות של החודשים הקודמים.
+ */
+function copyCategoryFormat_(sh, row, cat) {
+  if (!cat) return;
+  const target = sh.getRange(row, 1, 1, 6);
+  const sheets = [sh].concat(previousMonthSheets_(sh, 6));
+  for (const s of sheets) {
+    const last = s.getLastRow();
+    if (last < EXP_FIRST_ROW) continue;
+    const vals = s.getRange(EXP_FIRST_ROW, 1, last - EXP_FIRST_ROW + 1, 6).getValues();
+    for (let i = vals.length - 1; i >= 0; i--) {
+      const r = EXP_FIRST_ROW + i;
+      if (s.getSheetId() === sh.getSheetId() && r === row) continue;
+      if (String(vals[i][3]).trim() === 'סה"כ') continue;
+      if (String(vals[i][5]).trim() === cat && String(vals[i][3]).trim() !== "") {
+        s.getRange(r, 1, 1, 6).copyTo(target, SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
+        return;
+      }
+    }
+  }
+}
+
+function previousMonthSheets_(sh, count) {
+  const parts = sh.getName().trim().split(/\s+/);
+  let m = MONTHS.indexOf(parts[0]);
+  let y = parseInt(parts[1], 10);
+  if (m < 0 || isNaN(y)) return [];
+  const ss = sh.getParent(), out = [];
+  for (let k = 0; k < count; k++) {
+    m--; if (m < 0) { m = 11; y--; }
+    const yy = String(y).length === 4 ? String(y).slice(2) : String(y).padStart(2, "0");
+    const s = ss.getSheetByName(MONTHS[m] + " " + yy) || ss.getSheetByName(MONTHS[m] + " 20" + yy);
+    if (s) out.push(s);
+  }
+  return out;
 }
 
 function addIncome_(sh, dateText, src, amount) {
@@ -106,6 +146,11 @@ function addIncome_(sh, dateText, src, amount) {
       break;
     }
     row++;
+  }
+  // עיצוב כמו השורה שמעליה בטבלת ההכנסות
+  if (row > hRow + 1) {
+    sh.getRange(row - 1, hCol - 1, 1, 3)
+      .copyTo(sh.getRange(row, hCol - 1, 1, 3), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
   }
   sh.getRange(row, hCol - 1).setNumberFormat("@");
   sh.getRange(row, hCol - 1, 1, 3).setValues([[dateText, name, amount]]);
