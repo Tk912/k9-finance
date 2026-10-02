@@ -68,19 +68,58 @@ function addExpense_(sh, dateText, pay, desc, amount, cat) {
   }
   if (!totalRow) throw new Error('לא נמצאה שורת סה"כ בטבלת ההוצאות');
 
-  // שורה ריקה ראשונה לפני שורת הסה"כ
-  let row = null;
-  for (let r = EXP_FIRST_ROW; r < totalRow; r++) {
-    if (String(dVals[r - EXP_FIRST_ROW][0]).trim() === "") { row = r; break; }
-  }
-  // אין מקום: מוסיפים תאים רק בעמודות A-F מעל השורה האחרונה, כדי שנוסחת הסה"כ תתרחב
-  if (!row) {
-    row = Math.max(EXP_FIRST_ROW, totalRow - 1);
-    sh.getRange(row, 1, 1, 6).insertCells(SpreadsheetApp.Dimension.ROWS);
-  }
+  const row = pickExpenseRow_(sh, totalRow, cat);
   copyCategoryFormat_(sh, row, cat);
   sh.getRange(row, 1).setNumberFormat("@");
   sh.getRange(row, 1, 1, 6).setValues([[dateText, pay, "לא", desc, amount, cat]]);
+  return row;
+}
+
+/**
+ * בגיליון ההוצאות מקובצות לפי סיווג, וכל קבוצה צבועה בצבע שלה וכוללת לפעמים
+ * שורות ריקות צבועות מראש. הרשומה החדשה נכנסת לקבוצה של הסיווג שלה:
+ * 1. שורה ריקה בתוך הקבוצה, או שורה ריקה מיד אחריה שצבועה בצבע הקבוצה.
+ * 2. אם אין: מוסיפים תאים (רק בעמודות A-F) מיד אחרי השורה האחרונה של הקבוצה.
+ * 3. סיווג שאין לו קבוצה בחודש הזה: שורה ריקה אחרונה לפני הסה"כ, או תוספת מעליו.
+ * בכל המקרים ההוספה היא בתוך טווח נוסחת הסה"כ, כך שהנוסחה מתרחבת.
+ */
+function pickExpenseRow_(sh, totalRow, cat) {
+  const n = totalRow - EXP_FIRST_ROW;
+  if (n <= 0) {
+    sh.getRange(EXP_FIRST_ROW, 1, 1, 6).insertCells(SpreadsheetApp.Dimension.ROWS);
+    return EXP_FIRST_ROW;
+  }
+  const rng = sh.getRange(EXP_FIRST_ROW, 1, n, 6);
+  const vals = rng.getValues();
+  const bgs = rng.getBackgrounds();
+  const isBlank = i => String(vals[i][3]).trim() === "";
+  const catIdx = [];
+  for (let i = 0; i < n; i++) {
+    if (!isBlank(i) && String(vals[i][5]).trim() === cat) catIdx.push(i);
+  }
+
+  if (catIdx.length) {
+    const first = catIdx[0], last = catIdx[catIdx.length - 1];
+    const color = bgs[last][5];
+    for (let i = first; i <= last; i++) {
+      if (isBlank(i)) return EXP_FIRST_ROW + i;
+    }
+    for (let i = last + 1; i < n && isBlank(i) && bgs[i][5] === color; i++) {
+      return EXP_FIRST_ROW + i;
+    }
+    // ההוספה חייבת להיות מעל שורת הסה"כ, אחרת הנוסחה לא תכלול אותה
+    const row = Math.min(EXP_FIRST_ROW + last + 1, totalRow - 1);
+    sh.getRange(row, 1, 1, 6).insertCells(SpreadsheetApp.Dimension.ROWS);
+    return row;
+  }
+
+  if (isBlank(n - 1)) {
+    let i = n - 1;
+    while (i > 0 && isBlank(i - 1)) i--;
+    return EXP_FIRST_ROW + i;
+  }
+  const row = totalRow - 1;
+  sh.getRange(row, 1, 1, 6).insertCells(SpreadsheetApp.Dimension.ROWS);
   return row;
 }
 
