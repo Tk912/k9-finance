@@ -511,7 +511,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 
     <div class="footer-note" id="pendingExportBox" style="margin-top:22px; max-width:480px; display:none;">
       <h3 style="margin:0 0 8px; font-family:var(--font-head); font-size:16px; color:var(--ink);">רשומות ממתינות להעתקה לגיליון (<span id="pendingCount">0</span>)</h3>
-      <div class="count-note" style="margin-bottom:8px;">האפליקציה לא יכולה לכתוב אוטומטית לגיליון Google Sheets. הרשומות ששמרתם כאן מופיעות למטה מוכנות להעתקה — הדביקו אותן בעצמכם בלשונית החודש המתאימה בגיליון.</div>
+      <div class="count-note" style="margin-bottom:8px;">את הרשומות האלה לא הצלחנו לשלוח לגיליון (הדפדפן חסם פתיחת לשונית). הן מוכנות להעתקה — הדביקו אותן בעצמכם בלשונית החודש המתאימה בגיליון.</div>
       <div id="pendingList" style="font-size:13px; line-height:1.9; white-space:pre-wrap; background:var(--paper-2); border:1px solid var(--line); border-radius:8px; padding:10px; margin-bottom:10px; max-height:220px; overflow:auto;"></div>
       <div class="form-actions">
         <button type="button" class="btn" id="copyPendingBtn">העתק ללוח</button>
@@ -1239,13 +1239,17 @@ document.getElementById("entryForm").addEventListener("submit", (e)=>{
   populateFilters();
   renderAll();
 
-  pendingExport.push(rec);
-  savePending(pendingExport);
-  renderPendingExport();
+  const opened = writeToSheetViaTab(rec);
+  if(!opened){
+    pendingExport.push(rec);
+    savePending(pendingExport);
+    renderPendingExport();
+  }
 
   document.getElementById("entryForm").reset();
   document.getElementById("f-src-other").style.display = "none";
-  showToast((currentType==="expense" ? "ההוצאה נוספה" : "ההכנסה נוספה") + " — זכרו להעתיק לגיליון");
+  const what = currentType==="expense" ? "ההוצאה נוספה" : "ההכנסה נוספה";
+  showToast(opened ? what + " — נפתחה לשונית לרישום בגיליון" : what + " — לא ניתן לפתוח לשונית, זכרו להעתיק לגיליון");
 });
 
 // Theme toggle
@@ -1280,6 +1284,35 @@ const HEB_MONTHS = {
 function sheetNameFromMonthKey(key){
   const [y, m] = key.split("-");
   return MONTH_NAMES[parseInt(m,10)-1] + " " + y.slice(2);
+}
+
+// ---- כתיבה לגיליון דרך Apps Script שנפתח בלשונית חדשה ----
+// דף ב-claude.ai לא יכול לפנות ברקע לכתובות חיצוניות, אבל כן יכול לפתוח
+// לשונית. הסקריפט מקבל את פרטי הרשומה בכתובת ומוסיף שורה ללשונית החודש.
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwRdktFpVuZ6VtvIEO1f1bcnZ_gcodcfMBCPfhSGc4e4B5rplqZHzr7stA_bPCEKpdi/exec";
+const APPS_SCRIPT_TOKEN = "k9-eSxNZUqsW__u2KnNLMp38a_v";
+function writeToSheetViaTab(rec){
+  const params = new URLSearchParams({
+    token: APPS_SCRIPT_TOKEN,
+    id: rec.id,
+    type: rec.type,
+    date: rec.date,
+    desc: rec.desc,
+    amt: String(rec.amount)
+  });
+  if(rec.type === "expense"){
+    params.set("cat", rec.category || "");
+    params.set("pay", rec.payment || "");
+  } else {
+    params.set("src", rec.payment || rec.desc);
+  }
+  try{
+    const w = window.open(APPS_SCRIPT_URL + "?" + params.toString(), "_blank");
+    return !!w;
+  }catch(e){
+    console.error("open tab failed", e);
+    return false;
+  }
 }
 
 const PENDING_EXPORT_KEY = "ledger_pending_export_v1";
