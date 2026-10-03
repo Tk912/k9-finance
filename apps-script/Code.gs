@@ -99,8 +99,14 @@ function pickExpenseRow_(sh, totalRow, cat) {
   }
 
   if (catIdx.length) {
-    const first = catIdx[0], last = catIdx[catIdx.length - 1];
+    // הקבוצה = הרצף הרציף סביב המופע האחרון של הסיווג (שורות מאותו סיווג
+    // או שורות ריקות בצבע הקבוצה). שורה בודדת שסווגה במקום אחר לא נחשבת.
+    const last = catIdx[catIdx.length - 1];
     const color = bgs[last][5];
+    const inGroup = i => (!isBlank(i) && String(vals[i][5]).trim() === cat) ||
+                         (isBlank(i) && bgs[i][5] === color);
+    let first = last;
+    while (first > 0 && inGroup(first - 1)) first--;
     for (let i = first; i <= last; i++) {
       if (isBlank(i)) return EXP_FIRST_ROW + i;
     }
