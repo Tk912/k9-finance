@@ -8,6 +8,7 @@
  *        Execute as: Me · Who has access: Anyone
  */
 
+const SCRIPT_VERSION = "v4";
 const TOKEN = "k9-eSxNZUqsW__u2KnNLMp38a_v";
 const SHEET_ID = "1gLA2t9RToM5N-LhdSSqEufR3pGdTN8ouT8Yu_Pa0o3U";
 
@@ -271,7 +272,7 @@ function page_(ok, msg) {
     '<p style="font-size:16px">' + escape_(msg) + "</p>" +
     '<p style="color:#666;font-size:14px;margin-top:28px">אפשר לסגור את הלשונית ולחזור לאפליקציה.</p>' +
     "</body></html>";
-  return HtmlService.createHtmlOutput(html).setTitle(ok ? "נרשם ✓" : "שגיאה");
+  return HtmlService.createHtmlOutput(html).setTitle((ok ? "נרשם ✓" : "שגיאה") + " · " + SCRIPT_VERSION);
 }
 
 function escape_(s) {
