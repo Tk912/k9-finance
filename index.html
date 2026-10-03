@@ -477,10 +477,6 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         <label for="f-date">תאריך</label>
         <input type="date" id="f-date" required>
       </div>
-      <div class="field">
-        <label for="f-desc">תיאור</label>
-        <input type="text" id="f-desc" placeholder="לדוגמה: קניות בסופר" required>
-      </div>
       <div class="field" id="cat-field">
         <label for="f-cat">קטגוריה</label>
         <select id="f-cat"></select>
@@ -1241,13 +1237,14 @@ document.getElementById("f-src").addEventListener("change", ()=>{
 document.getElementById("entryForm").addEventListener("submit", (e)=>{
   e.preventDefault();
   const date = document.getElementById("f-date").value;
-  const desc = document.getElementById("f-desc").value.trim();
   const amt = parseFloat(document.getElementById("f-amt").value);
-  if(!date || !desc || isNaN(amt) || amt<=0){ showToast("נא למלא את כל השדות"); return; }
+  if(!date || isNaN(amt) || amt<=0){ showToast("נא למלא תאריך וסכום"); return; }
   let incomeSrc = document.getElementById("f-src").value;
   if(incomeSrc === "אחר"){
     incomeSrc = document.getElementById("f-src-other").value.trim() || "הכנסה";
   }
+  // אין שדה תיאור בטופס: התיאור (עמודה D בגיליון) הוא שם הסיווג, או מקור ההכנסה
+  const desc = currentType==="expense" ? document.getElementById("f-cat").value : incomeSrc;
   const rec = {
     id: "u_" + Date.now() + "_" + Math.random().toString(36).slice(2,7),
     type: currentType,
