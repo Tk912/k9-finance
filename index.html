@@ -624,6 +624,20 @@ function saveRecords(recs){
 }
 
 let records = loadRecords();
+// ניקוי חד-פעמי: רשומות בדיקה שנוספו מקומית בזמן הפיתוח (בדיקת סנכרון, בדיקת סנכרון 2, בדיקת רשימת המתנה)
+(function purgeTestRecords(){
+  const isTest = r => r && r.id && r.id.startsWith("u_") && /^בדיקת (סנכרון|רשימת המתנה)/.test(String(r.desc||"").trim());
+  const before = records.length;
+  records = records.filter(r => !isTest(r));
+  if(records.length !== before) saveRecords(records);
+  try{
+    const raw = localStorage.getItem("ledger_pending_export_v1");
+    if(raw){
+      const list = JSON.parse(raw).filter(r => !isTest(r));
+      localStorage.setItem("ledger_pending_export_v1", JSON.stringify(list));
+    }
+  }catch(e){}
+})();
 let catChart, trendChart;
 
 function fmtILS(n){
@@ -1263,9 +1277,24 @@ document.getElementById("themeToggle").addEventListener("click", ()=>{
   else { root.setAttribute("data-theme","dark"); document.getElementById("themeToggle").textContent="מצב בהיר"; }
 });
 
+// אישור בשתי לחיצות: חלון confirm() לא מוצג בתוך ה-Artifact ותמיד מחזיר "לא"
+function confirmByDoubleClick(btn, prompt){
+  if(btn.dataset.armed === "1"){
+    btn.dataset.armed = "";
+    btn.textContent = btn.dataset.label;
+    clearTimeout(btn._armTimer);
+    return true;
+  }
+  btn.dataset.label = btn.textContent;
+  btn.dataset.armed = "1";
+  btn.textContent = prompt;
+  btn._armTimer = setTimeout(()=>{ btn.dataset.armed = ""; btn.textContent = btn.dataset.label; }, 4000);
+  return false;
+}
+
 // Reset
-document.getElementById("resetBtn").addEventListener("click", ()=>{
-  if(!confirm("לאפס את כל הנתונים לנתוני המקור? כל רשומה שהוספתם תימחק.")) return;
+document.getElementById("resetBtn").addEventListener("click", (ev)=>{
+  if(!confirmByDoubleClick(ev.currentTarget, "לחצו שוב לאיפוס")) return;
   records = seedToRecords();
   saveRecords(records);
   populateFilters();
@@ -1360,6 +1389,9 @@ function renderPendingExport(){
     a.addEventListener("click", () => {
       // הלשונית שנפתחת מציגה ✅ או ⚠️. הרשומה יורדת מהרשימה; אם ברשימה נשאר ⚠️, אפשר להעתיק ידנית.
       setTimeout(() => {
+        // מסמנים שהרשומה נשלחה, כדי שבסנכרון הבא היא תוחלף בשורה מהגיליון ולא תיספר פעמיים
+        records.forEach(r => { if(r.id === rec.id) r.sentToSheet = true; });
+        saveRecords(records);
         pendingExport = pendingExport.filter(r => r.id !== rec.id);
         savePending(pendingExport);
         renderPendingExport();
@@ -1390,9 +1422,9 @@ async function copyPendingToClipboard(){
 }
 
 document.getElementById("copyPendingBtn").addEventListener("click", copyPendingToClipboard);
-document.getElementById("clearPendingBtn").addEventListener("click", ()=>{
+document.getElementById("clearPendingBtn").addEventListener("click", (ev)=>{
   if(pendingExport.length === 0) return;
-  if(!confirm("לנקות את רשימת הרשומות הממתינות? ודאו שכבר הדבקתם אותן בגיליון.")) return;
+  if(!confirmByDoubleClick(ev.currentTarget, "לחצו שוב לניקוי")) return;
   pendingExport = [];
   savePending(pendingExport);
   renderPendingExport();
@@ -1661,7 +1693,8 @@ async function syncFromSheet(){
       EXPENSE_SEED_BY_MONTH[key].push({ id:"seedx_"+i, category:t.c, amount:t.a });
     });
 
-    const userRecords = records.filter(r=>r.id && r.id.startsWith("u_"));
+    // רשומות שנשלחו לגיליון כבר מגיעות ממנו, ולכן משאירים רק רשומות מקומיות שלא נשלחו
+    const userRecords = records.filter(r=>r.id && r.id.startsWith("u_") && !r.sentToSheet);
     records = seedToRecords().concat(userRecords);
     saveRecords(records);
     setLastSyncNow();
