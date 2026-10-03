@@ -16,6 +16,7 @@ const MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יו
 
 // עמודות טבלת ההוצאות: A תאריך, B אמצעי תשלום, C תשלומים, D תיאור, E סכום, F קטגוריה
 const EXP_FIRST_ROW = 5;
+let WARN = [];
 const COL_DESC = 4;
 
 function doGet(e) {
@@ -23,6 +24,7 @@ function doGet(e) {
   try {
     if (p.token !== TOKEN) throw new Error("אין הרשאה (טוקן שגוי)");
 
+    WARN = [];
     const lock = LockService.getScriptLock();
     lock.waitLock(20000);
     try {
@@ -50,7 +52,9 @@ function doGet(e) {
       }
 
       if (p.id) props.setProperty("done_" + p.id, "1");
-      return page_(true, "נרשם בלשונית \"" + sh.getName() + "\" בשורה " + where + ".");
+      let msg = "נרשם בלשונית \"" + sh.getName() + "\" בשורה " + where + ".";
+      if (WARN.length) msg += " שימו לב: " + WARN.join(" ");
+      return page_(true, msg);
     } finally {
       lock.releaseLock();
     }
@@ -72,7 +76,47 @@ function addExpense_(sh, dateText, pay, desc, amount, cat) {
   copyCategoryFormat_(sh, row, cat);
   sh.getRange(row, 1).setNumberFormat("@");
   sh.getRange(row, 1, 1, 6).setValues([[dateText, pay, "לא", desc, amount, cat]]);
+  addToCategoryTotal_(sh, cat, "E" + row);
   return row;
+}
+
+/**
+ * בטבלת הסיכום לפי סיווג (מקרא) כל סכום הוא נוסחה שמפרטת תאים ספציפיים,
+ * למשל =SUM(E30) או =E31. מוסיפים אליה את התא של השורה החדשה.
+ */
+function addToCategoryTotal_(sh, cat, ref) {
+  const vals = sh.getDataRange().getValues();
+  let hr = -1, hc = -1;
+  for (let r = 0; r < vals.length && hr < 0; r++) {
+    for (let c = 0; c < vals[r].length; c++) {
+      if (vals[r][c] === "אחוז מכלל ההוצאות") { hr = r; hc = c; break; }
+    }
+  }
+  if (hr < 0) { WARN.push("לא נמצאה טבלת הסיכום לפי סיווג. יש לעדכן את הסכום שם ידנית."); return; }
+  const gcol = hc - 3, icol = hc - 1;
+  for (let r = hr + 1; r < Math.min(vals.length, hr + 40); r++) {
+    const label = String(vals[r][gcol]).trim();
+    if (label === 'סה"כ ההוצאות:') break;
+    if (label === String(cat).trim()) {
+      appendRefToFormula_(sh.getRange(r + 1, icol + 1), ref);
+      return;
+    }
+  }
+  WARN.push('הסיווג "' + cat + '" לא קיים בטבלת הסיכום, ולכן הסכום לא נוסף שם. יש להוסיף אותו ידנית.');
+}
+
+function appendRefToFormula_(cell, ref) {
+  let f = cell.getFormula();
+  if (!f) {
+    const v = cell.getValue();
+    f = (v === "" || v === null) ? "" : "=" + v;
+  }
+  if (new RegExp("(^|[^A-Z0-9])" + ref + "(?![0-9])").test(f)) return;
+  let next;
+  if (!f) next = "=" + ref;
+  else if (/^=SUM\([^()]*\)$/i.test(f)) next = f.replace(/\)$/, "," + ref + ")");
+  else next = "=SUM(" + f.slice(1) + "," + ref + ")";
+  cell.setFormula(next);
 }
 
 /**
@@ -180,25 +224,40 @@ function addIncome_(sh, dateText, src, amount) {
   if (!hRow) throw new Error('לא נמצאה טבלת ההכנסות (כותרת "שם")');
 
   const name = String(src).replace(/^משכורת\s+/, "").trim();
-  let row = hRow + 1;
-  while (row <= last) {
-    const v = String(sh.getRange(row, hCol).getValue()).trim();
-    if (v === "" ) break;
-    if (v === 'סה"כ') {
-      // אין שורה פנויה: מוסיפים תאים בשלוש עמודות הטבלה מעל השורה האחרונה
-      row = Math.max(hRow + 1, row - 1);
-      sh.getRange(row, hCol - 1, 1, 3).insertCells(SpreadsheetApp.Dimension.ROWS);
-      break;
-    }
-    row++;
+  const dCol = hCol - 1, aCol = hCol + 1;
+
+  // שורת הסה"כ של טבלת ההכנסות: "סה"כ" כתוב בעמודת התאריך, משמאל לעמודת השם
+  let totalRow = null;
+  for (let r = hRow + 1; r <= Math.min(last, hRow + 30); r++) {
+    const g = String(sh.getRange(r, dCol).getValue()).trim();
+    const h = String(sh.getRange(r, hCol).getValue()).trim();
+    if (g === 'סה"כ' || h === 'סה"כ') { totalRow = r; break; }
   }
+  if (!totalRow) throw new Error('לא נמצאה שורת סה"כ בטבלת ההכנסות');
+
+  // שורה פנויה בין הכותרת לסה"כ; אם אין, מוסיפים תאים רק בשלוש עמודות הטבלה
+  let row = null;
+  for (let r = hRow + 1; r < totalRow; r++) {
+    if (String(sh.getRange(r, hCol).getValue()).trim() === "" &&
+        String(sh.getRange(r, aCol).getValue()).trim() === "") { row = r; break; }
+  }
+  if (!row) {
+    row = totalRow;
+    sh.getRange(row, dCol, 1, 3).insertCells(SpreadsheetApp.Dimension.ROWS);
+    totalRow++;
+  }
+
   // עיצוב כמו השורה שמעליה בטבלת ההכנסות
   if (row > hRow + 1) {
-    sh.getRange(row - 1, hCol - 1, 1, 3)
-      .copyTo(sh.getRange(row, hCol - 1, 1, 3), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
+    sh.getRange(row - 1, dCol, 1, 3)
+      .copyTo(sh.getRange(row, dCol, 1, 3), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
   }
-  sh.getRange(row, hCol - 1).setNumberFormat("@");
-  sh.getRange(row, hCol - 1, 1, 3).setValues([[dateText, name, amount]]);
+  sh.getRange(row, dCol).setNumberFormat("@");
+  sh.getRange(row, dCol, 1, 3).setValues([[dateText, name, amount]]);
+
+  // נוסחת הסה"כ מפרטת תאים ספציפיים, למשל =SUM(I8,I10,I9). מוסיפים את התא החדש.
+  const colLetter = sh.getRange(1, aCol).getA1Notation().replace(/[0-9]/g, "");
+  appendRefToFormula_(sh.getRange(totalRow, aCol), colLetter + row);
   return row;
 }
 
