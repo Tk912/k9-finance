@@ -317,6 +317,12 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 
     form.entry-form{ padding:14px; max-width:none; }
   }
+.pending-row{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid var(--line)}
+.pending-row:last-child{border-bottom:0}
+.pending-text{flex:1 1 220px;min-width:0;white-space:normal;overflow-wrap:anywhere}
+.pending-send{text-decoration:none;white-space:nowrap;font-family:var(--font-body);font-size:14px;font-weight:600;background:var(--forest);color:var(--card);border:1px solid var(--forest-deep);border-radius:8px;padding:7px 14px}
+.pending-send:hover{background:var(--forest-deep)}
+.pending-send:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 </style>
 </head>
 <body>
@@ -510,8 +516,8 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     </form>
 
     <div class="footer-note" id="pendingExportBox" style="margin-top:22px; max-width:480px; display:none;">
-      <h3 style="margin:0 0 8px; font-family:var(--font-head); font-size:16px; color:var(--ink);">רשומות ממתינות להעתקה לגיליון (<span id="pendingCount">0</span>)</h3>
-      <div class="count-note" style="margin-bottom:8px;">את הרשומות האלה לא הצלחנו לשלוח לגיליון (הדפדפן חסם פתיחת לשונית). הן מוכנות להעתקה — הדביקו אותן בעצמכם בלשונית החודש המתאימה בגיליון.</div>
+      <h3 style="margin:0 0 8px; font-family:var(--font-head); font-size:16px; color:var(--ink);">רשומות ממתינות לרישום בגיליון (<span id="pendingCount">0</span>)</h3>
+      <div class="count-note" style="margin-bottom:8px;">לחצו "רשום בגיליון" ליד כל רשומה. תיפתח לשונית שמאשרת את הרישום (✅). אם מופיע ⚠️, אפשר להעתיק את הרשומה ולהדביק אותה בגיליון ידנית.</div>
       <div id="pendingList" style="font-size:13px; line-height:1.9; white-space:pre-wrap; background:var(--paper-2); border:1px solid var(--line); border-radius:8px; padding:10px; margin-bottom:10px; max-height:220px; overflow:auto;"></div>
       <div class="form-actions">
         <button type="button" class="btn" id="copyPendingBtn">העתק ללוח</button>
@@ -1239,17 +1245,14 @@ document.getElementById("entryForm").addEventListener("submit", (e)=>{
   populateFilters();
   renderAll();
 
-  const opened = writeToSheetViaTab(rec);
-  if(!opened){
-    pendingExport.push(rec);
-    savePending(pendingExport);
-    renderPendingExport();
-  }
+  pendingExport.push(rec);
+  savePending(pendingExport);
+  renderPendingExport();
 
   document.getElementById("entryForm").reset();
   document.getElementById("f-src-other").style.display = "none";
   const what = currentType==="expense" ? "ההוצאה נוספה" : "ההכנסה נוספה";
-  showToast(opened ? what + " — נפתחה לשונית לרישום בגיליון" : what + " — לא ניתן לפתוח לשונית, זכרו להעתיק לגיליון");
+  showToast(what + " — לחצו \"רשום בגיליון\" למטה");
 });
 
 // Theme toggle
@@ -1291,7 +1294,7 @@ function sheetNameFromMonthKey(key){
 // לשונית. הסקריפט מקבל את פרטי הרשומה בכתובת ומוסיף שורה ללשונית החודש.
 const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxlsWnsF-OH28blEf8dcKP-iG1UYqWOW3UXATiEcIiSTG3ALOwElXjOq8NqjTTz2I7y/exec";
 const APPS_SCRIPT_TOKEN = "k9-eSxNZUqsW__u2KnNLMp38a_v";
-function writeToSheetViaTab(rec){
+function sheetWriteUrl(rec){
   const params = new URLSearchParams({
     token: APPS_SCRIPT_TOKEN,
     id: rec.id,
@@ -1306,13 +1309,7 @@ function writeToSheetViaTab(rec){
   } else {
     params.set("src", rec.payment || rec.desc);
   }
-  try{
-    const w = window.open(APPS_SCRIPT_URL + "?" + params.toString(), "_blank");
-    return !!w;
-  }catch(e){
-    console.error("open tab failed", e);
-    return false;
-  }
+  return APPS_SCRIPT_URL + "?" + params.toString();
 }
 
 const PENDING_EXPORT_KEY = "ledger_pending_export_v1";
@@ -1347,7 +1344,32 @@ function renderPendingExport(){
   countEl.textContent = pendingExport.length;
   if(pendingExport.length === 0){ box.style.display = "none"; return; }
   box.style.display = "block";
-  list.textContent = pendingExport.map(pendingLineFor).join("\n");
+  list.textContent = "";
+  pendingExport.forEach(rec => {
+    const row = document.createElement("div");
+    row.className = "pending-row";
+    const txt = document.createElement("span");
+    txt.className = "pending-text";
+    txt.textContent = pendingLineFor(rec);
+    const a = document.createElement("a");
+    a.className = "btn pending-send";
+    a.href = sheetWriteUrl(rec);
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.textContent = "רשום בגיליון";
+    a.addEventListener("click", () => {
+      // הלשונית שנפתחת מציגה ✅ או ⚠️. הרשומה יורדת מהרשימה; אם ברשימה נשאר ⚠️, אפשר להעתיק ידנית.
+      setTimeout(() => {
+        pendingExport = pendingExport.filter(r => r.id !== rec.id);
+        savePending(pendingExport);
+        renderPendingExport();
+        showToast("נשלח לגיליון — בדקו שבלשונית שנפתחה מופיע ✅");
+      }, 400);
+    });
+    row.appendChild(txt);
+    row.appendChild(a);
+    list.appendChild(row);
+  });
 }
 
 async function copyPendingToClipboard(){
