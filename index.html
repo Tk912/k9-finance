@@ -480,18 +480,23 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       <div class="field" id="cat-field">
         <label for="f-cat">קטגוריה</label>
         <select id="f-cat"></select>
-        <input type="text" id="f-cat-other" placeholder="פירוט ההוצאה" style="display:none; margin-top:6px;">
+      </div>
+      <div class="field" id="desc-field">
+        <label for="f-desc">פירוט</label>
+        <input type="text" id="f-desc" placeholder="לדוגמה: קניות בסופר (רשות)">
       </div>
       <div class="field" id="pay-field">
         <label for="f-pay">אמצעי תשלום</label>
         <select id="f-pay">
           <option>אשראי</option>
+          <option value="אשראי תשלומים">אשראי תשלומים</option>
           <option>מזומן</option>
           <option>הוראת קבע</option>
           <option>אשראי קבע</option>
           <option>צ'ק</option>
           <option>העברה בנקאית</option>
         </select>
+        <input type="number" id="f-inst" min="2" max="60" step="1" placeholder="מספר תשלומים" style="display:none; margin-top:6px;">
       </div>
       <div class="field" id="src-field" style="display:none;">
         <label for="f-src">מקור ההכנסה</label>
@@ -504,8 +509,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         <input type="text" id="f-src-other" placeholder="פירוט מקור ההכנסה" style="display:none; margin-top:6px;">
       </div>
       <div class="field">
-        <label for="f-amt">סכום (₪)</label>
+        <label for="f-amt" id="f-amt-label">סכום (₪)</label>
         <input type="number" id="f-amt" step="0.01" min="0" required>
+        <div class="count-note" id="f-inst-note" style="display:none; margin-top:4px;"></div>
       </div>
       <div class="form-actions">
         <button type="submit" class="primary" id="submitBtn">הוספת הוצאה</button>
@@ -1227,6 +1233,8 @@ document.querySelectorAll(".type-switch button").forEach(btn=>{
     const isExpense = currentType==="expense";
     document.getElementById("cat-field").style.display = isExpense ? "flex":"none";
     document.getElementById("pay-field").style.display = isExpense ? "flex":"none";
+    document.getElementById("desc-field").style.display = isExpense ? "flex":"none";
+    updateInstallmentUI();
     document.getElementById("src-field").style.display = isExpense ? "none":"flex";
     document.getElementById("submitBtn").textContent = isExpense ? "הוספת הוצאה" : "הוספת הכנסה";
     document.getElementById("submitBtn").className = "primary" + (isExpense ? " rust" : "");
@@ -1235,8 +1243,28 @@ document.querySelectorAll(".type-switch button").forEach(btn=>{
 
 document.getElementById("f-cat").addEventListener("change", ()=>{
   const isOther = document.getElementById("f-cat").value === OTHER_CAT;
-  document.getElementById("f-cat-other").style.display = isOther ? "block" : "none";
-  if(isOther) document.getElementById("f-cat-other").focus();
+  document.getElementById("f-desc").placeholder = isOther ? "פרטו את ההוצאה (חובה)" : "לדוגמה: קניות בסופר (רשות)";
+  if(isOther) document.getElementById("f-desc").focus();
+});
+
+// אשראי תשלומים: מזינים את סכום העסקה הכולל ואת מספר התשלומים
+function updateInstallmentUI(){
+  const isInst = document.getElementById("f-pay").value === "אשראי תשלומים" && currentType === "expense";
+  document.getElementById("f-inst").style.display = isInst ? "block" : "none";
+  document.getElementById("f-amt-label").textContent = isInst ? "סכום העסקה הכולל (₪)" : "סכום (₪)";
+  const note = document.getElementById("f-inst-note");
+  const total = parseFloat(document.getElementById("f-amt").value);
+  const n = parseInt(document.getElementById("f-inst").value, 10);
+  if(isInst && total > 0 && n >= 2){
+    note.textContent = `${n} תשלומים של ${fmtILS(total / n)}. בגיליון יירשם התשלום הראשון: "כן (${n}) 1".`;
+    note.style.display = "block";
+  } else {
+    note.style.display = "none";
+  }
+}
+["f-pay","f-inst","f-amt"].forEach(id => {
+  document.getElementById(id).addEventListener("input", updateInstallmentUI);
+  document.getElementById(id).addEventListener("change", updateInstallmentUI);
 });
 
 document.getElementById("f-src").addEventListener("change", ()=>{
@@ -1247,28 +1275,37 @@ document.getElementById("f-src").addEventListener("change", ()=>{
 document.getElementById("entryForm").addEventListener("submit", (e)=>{
   e.preventDefault();
   const date = document.getElementById("f-date").value;
-  const amt = parseFloat(document.getElementById("f-amt").value);
-  if(!date || isNaN(amt) || amt<=0){ showToast("נא למלא תאריך וסכום"); return; }
+  const amtInput = parseFloat(document.getElementById("f-amt").value);
+  if(!date || isNaN(amtInput) || amtInput<=0){ showToast("נא למלא תאריך וסכום"); return; }
+  const isInst = currentType==="expense" && document.getElementById("f-pay").value === "אשראי תשלומים";
+  let instCount = null;
+  if(isInst){
+    instCount = parseInt(document.getElementById("f-inst").value, 10);
+    if(!(instCount >= 2 && instCount <= 60)){ showToast("נא למלא מספר תשלומים (2 עד 60)"); return; }
+  }
+  // בתשלומים: הסכום שהוזן הוא סכום העסקה, והחודש נטען בתשלום אחד ממנו
+  const amt = isInst ? Math.round(amtInput / instCount * 100) / 100 : amtInput;
   let incomeSrc = document.getElementById("f-src").value;
   if(incomeSrc === "אחר"){
     incomeSrc = document.getElementById("f-src-other").value.trim() || "הכנסה";
   }
-  // אין שדה תיאור בטופס: התיאור (עמודה D בגיליון) הוא שם הסיווג, או מקור ההכנסה
+  // הפירוט נכתב בעמודה D. אם הוא ריק, נכתב שם הסיווג (או מקור ההכנסה), כדי שהשורה לא תיחשב ריקה בגיליון
+  const typedDesc = document.getElementById("f-desc").value.trim();
   let category = currentType==="expense" ? document.getElementById("f-cat").value : null;
-  let desc = currentType==="expense" ? category : incomeSrc;
   if(category === OTHER_CAT){
-    const other = document.getElementById("f-cat-other").value.trim();
-    if(!other){ showToast("נא לפרט את ההוצאה"); return; }
+    if(!typedDesc){ showToast("בחרתם \"אחר\": נא למלא פירוט"); return; }
     category = OTHER_CAT_TARGET;
-    desc = other;
   }
+  let desc = typedDesc || (currentType==="expense" ? category : incomeSrc);
   const rec = {
     id: "u_" + Date.now() + "_" + Math.random().toString(36).slice(2,7),
     type: currentType,
     date, month: date.slice(0,7), amount: amt, desc,
     category,
-    payment: currentType==="expense" ? document.getElementById("f-pay").value : incomeSrc,
-    installments: "לא"
+    payment: currentType==="expense" ? (isInst ? "אשראי" : document.getElementById("f-pay").value) : incomeSrc,
+    installments: isInst ? `כן (${instCount}) 1` : "לא",
+    instCount: isInst ? instCount : null,
+    instTotal: isInst ? amtInput : null
   };
   records.push(rec);
   saveRecords(records);
@@ -1281,7 +1318,7 @@ document.getElementById("entryForm").addEventListener("submit", (e)=>{
 
   document.getElementById("entryForm").reset();
   document.getElementById("f-src-other").style.display = "none";
-  document.getElementById("f-cat-other").style.display = "none";
+  updateInstallmentUI();
   const what = currentType==="expense" ? "ההוצאה נוספה" : "ההכנסה נוספה";
   showToast(what + " — לחצו \"רשום בגיליון\" למטה");
 });
@@ -1352,6 +1389,10 @@ function sheetWriteUrl(rec){
   if(rec.type === "expense"){
     params.set("cat", rec.category || "");
     params.set("pay", rec.payment || "");
+    if(rec.instCount){
+      params.set("inst", String(rec.instCount));
+      params.set("total", String(rec.instTotal));
+    }
   } else {
     params.set("src", rec.payment || rec.desc);
   }

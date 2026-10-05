@@ -8,7 +8,7 @@
  *        Execute as: Me · Who has access: Anyone
  */
 
-const SCRIPT_VERSION = "v4";
+const SCRIPT_VERSION = "v5";
 const TOKEN = "k9-eSxNZUqsW__u2KnNLMp38a_v";
 const SHEET_ID = "1gLA2t9RToM5N-LhdSSqEufR3pGdTN8ouT8Yu_Pa0o3U";
 
@@ -49,7 +49,10 @@ function doGet(e) {
       if (p.type === "income") {
         where = addIncome_(sh, dateText, p.src || p.desc, amount);
       } else {
-        where = addExpense_(sh, dateText, p.pay || "", p.desc, amount, p.cat || "");
+        const inst = parseInt(p.inst, 10);
+        const total = parseFloat(p.total);
+        const instInfo = (inst >= 2 && total > 0) ? { count: inst, total: total } : null;
+        where = addExpense_(sh, dateText, p.pay || "", p.desc, amount, p.cat || "", instInfo);
       }
 
       if (p.id) props.setProperty("done_" + p.id, "1");
@@ -64,7 +67,7 @@ function doGet(e) {
   }
 }
 
-function addExpense_(sh, dateText, pay, desc, amount, cat) {
+function addExpense_(sh, dateText, pay, desc, amount, cat, instInfo) {
   const last = sh.getLastRow();
   let totalRow = null;
   const dVals = sh.getRange(EXP_FIRST_ROW, COL_DESC, Math.max(1, last - EXP_FIRST_ROW + 1), 1).getValues();
@@ -76,7 +79,10 @@ function addExpense_(sh, dateText, pay, desc, amount, cat) {
   const row = pickExpenseRow_(sh, totalRow, cat);
   copyCategoryFormat_(sh, row, cat);
   sh.getRange(row, 1).setNumberFormat("@");
-  sh.getRange(row, 1, 1, 6).setValues([[dateText, pay, "לא", desc, amount, cat]]);
+  // תשלומים: עמודה C בפורמט של הגיליון "כן (מספר תשלומים) מספר התשלום", ובעמודה E נוסחה של סכום העסקה חלקי מספר התשלומים
+  const instText = instInfo ? "כן (" + instInfo.count + ") 1" : "לא";
+  sh.getRange(row, 1, 1, 6).setValues([[dateText, pay, instText, desc, amount, cat]]);
+  if (instInfo) sh.getRange(row, 5).setFormula("=" + instInfo.total + "/" + instInfo.count);
   addToCategoryTotal_(sh, cat, "E" + row);
   return row;
 }
