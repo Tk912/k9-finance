@@ -1934,26 +1934,51 @@ window.addEventListener("load", () => {
     return btoa(bin);
   }
   async function ocrViaDrive(file){
-    let fileId = null;
     const fail = (step, e) => { const err = new Error(step); err.driveStep = step; err.cause = e; return err; };
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    // הטקסט שנחלץ, בלי שורת התוויות ש-Drive מוסיף בסוף ("Image labels: ...")
+    const clean = t => String(t || "").replace(/Image labels:[\s\S]*$/i, "").trim();
     let b64;
     try{ b64 = await toJpegBase64(file); }catch(e){ throw fail("קריאת התמונה", e); }
-    try{
-      const res = await mcp.callTool("Google Drive", "create_file", {
-        title: "K9 סריקה זמנית " + new Date().toISOString().slice(0,19) + ".jpg",
-        base64Content: b64, contentMimeType: "image/jpeg", disableConversionToGoogleType: true
-      });
+    const stamp = new Date().toISOString().slice(0,19);
+    const created = [];
+    const upload = async (convert) => {
+      const args = { title: "K9 סריקה זמנית " + stamp, base64Content: b64, contentMimeType: "image/jpeg" };
+      if(!convert) args.disableConversionToGoogleType = true;
+      const res = await mcp.callTool("Google Drive", "create_file", args);
       const pl = res && res.payload;
-      fileId = pl && (pl.id || (pl.file && pl.file.id));
-    }catch(e){ throw fail("העלאה", e); }
-    if(!fileId) throw fail("העלאה", null);
-    try{
-      const res = await mcp.callTool("Google Drive", "read_file_content", { fileId });
+      const id = pl && (pl.id || (pl.file && pl.file.id));
+      if(id) created.push(id);
+      return id;
+    };
+    const read = async (id) => {
+      const res = await mcp.callTool("Google Drive", "read_file_content", { fileId: id });
       const pl = res && res.payload;
-      return (pl && (pl.fileContent || pl.content)) || "";
-    }catch(e){ throw fail("קריאת הטקסט", e); }
-    finally{
-      mcp.callTool("Google Drive", "trash_file", { fileId }).catch(() => {});
+      return clean(pl && (pl.fileContent || pl.content));
+    };
+    try{
+      // 1. העלאה עם המרה ל-Google Doc: Drive מחלץ את הטקסט כבר בזמן ההעלאה
+      let id = null;
+      try{ id = await upload(true); }catch(e){ id = null; }
+      if(id){
+        try{ const t = await read(id); if(t.length >= 5) return t; }catch(e){}
+      }
+      // 2. העלאה כתמונה וקריאה חוזרת: Drive מחלץ טקסט מתמונות ברקע, אחרי כמה שניות
+      const ids = id ? [id] : [];
+      try{ const img = await upload(false); if(img) ids.push(img); }catch(e){ if(!ids.length) throw fail("העלאה", e); }
+      if(!ids.length) throw fail("העלאה", null);
+      let lastErr = null;
+      for(let i = 0; i < 6; i++){
+        setStatus("מחכה ש-Google Drive יקרא את הטקסט… (" + (i + 1) + "/6)");
+        await sleep(2000);
+        for(const fid of ids){
+          try{ const t = await read(fid); lastErr = null; if(t.length >= 5) return t; }catch(e){ lastErr = e; }
+        }
+      }
+      if(lastErr) throw fail("קריאת הטקסט", lastErr);
+      return "";
+    } finally {
+      created.forEach(fid => mcp.callTool("Google Drive", "trash_file", { fileId: fid }).catch(() => {}));
     }
   }
 
