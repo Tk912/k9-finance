@@ -323,6 +323,13 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 .pending-send{text-decoration:none;white-space:nowrap;font-family:var(--font-body);font-size:14px;font-weight:600;background:var(--forest);color:var(--card);border:1px solid var(--forest-deep);border-radius:8px;padding:7px 14px}
 .pending-send:hover{background:var(--forest-deep)}
 .pending-send:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.scan-box{display:flex;flex-direction:column;gap:6px;padding:12px;border:1px dashed var(--forest);border-radius:10px;background:var(--paper-2)}
+.scan-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;align-self:flex-start;cursor:pointer;font-family:var(--font-body);font-size:15px;font-weight:600;color:var(--card);background:var(--forest);border:1px solid var(--forest-deep);border-radius:8px;padding:8px 14px}
+.scan-btn:hover{background:var(--forest-deep)}
+.scan-btn.busy{opacity:.6;pointer-events:none}
+.scan-status{font-size:13px;color:var(--ink-soft);line-height:1.6}
+.scan-status.err{color:var(--rust)}
+.scan-filled{outline:2px solid var(--gold);outline-offset:1px}
 </style>
 </head>
 <body>
@@ -469,6 +476,14 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 
   <section class="panel" id="panel-add">
     <form class="entry-form" id="entryForm">
+      <div class="scan-box" id="scanBox" hidden>
+        <label class="scan-btn" for="f-scan">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2M8 9h8M8 12h8M8 15h5"/></svg>
+          סריקת חשבונית
+        </label>
+        <input type="file" id="f-scan" accept="image/*" hidden>
+        <div class="scan-status" id="scanStatus" aria-live="polite">צלמו חשבונית או קבלה, והפרטים יתמלאו בטופס לבדיקה לפני ההוספה.</div>
+      </div>
       <div class="type-switch">
         <button type="button" data-t="expense" class="active">הוצאה</button>
         <button type="button" data-t="income">הכנסה</button>
@@ -1798,6 +1813,99 @@ renderAll();
 window.addEventListener("load", () => {
   setTimeout(() => { syncFromSheet(); }, 300);
 });
+
+// ---- סריקת חשבונית: Claude קורא את התמונה וממלא את הטופס לבדיקה ----
+(async function initInvoiceScan(){
+  let sample = null, caps = null;
+  try{ sample = (typeof claude !== "undefined" && claude.use) ? await claude.use("sample") : null; }catch(e){ sample = null; }
+  if(!sample) return;
+  try{ caps = await sample.limits(); }catch(e){ caps = null; }
+  if(!caps || !caps.images) return;
+  const box = document.getElementById("scanBox");
+  const input = document.getElementById("f-scan");
+  const status = document.getElementById("scanStatus");
+  const btn = box.querySelector(".scan-btn");
+  if(caps.images.mediaTypes && caps.images.mediaTypes.length) input.accept = caps.images.mediaTypes.join(",");
+  const syncVisibility = () => { box.hidden = currentType !== "expense"; };
+  syncVisibility();
+  document.querySelectorAll(".type-switch button").forEach(b => b.addEventListener("click", syncVisibility));
+
+  const setStatus = (text, isErr) => { status.textContent = text; status.classList.toggle("err", !!isErr); };
+  const ERR = {
+    not_granted: "הסריקה לא אושרה לאפליקציה הזו.",
+    sampling_disabled: "הסריקה לא זמינה בחשבון הזה.",
+    rate_limited: "יותר מדי סריקות ברצף, או שנגמרה מכסת השימוש. נסו שוב מאוחר יותר.",
+    session_expired: "צריך להתחבר מחדש ל-Claude ולנסות שוב.",
+    image_rejected: "לא ניתן לקרוא את הקובץ. נסו תמונה אחרת (JPG או PNG).",
+    images_unavailable: "סריקת תמונות לא זמינה כאן.",
+    refused: "לא הצלחנו לקרוא את החשבונית. נסו תמונה ברורה יותר.",
+    invalid_json: "התשובה לא הובנה. נסו לסרוק שוב.",
+    empty_completion: "לא זוהו פרטים בתמונה. נסו תמונה ברורה יותר."
+  };
+  let ctl = null, permanentOff = false;
+
+  input.addEventListener("change", async () => {
+    const file = input.files && input.files[0];
+    input.value = "";
+    if(!file || permanentOff) return;
+    if(caps.images.maxInputBytes && file.size > caps.images.maxInputBytes){
+      setStatus("הקובץ גדול מדי. נסו תמונה קטנה יותר.", true); return;
+    }
+    if(ctl) ctl.abort();
+    ctl = new AbortController();
+    btn.classList.add("busy");
+    setStatus("קורא את החשבונית… זה לוקח כמה שניות.");
+    const today = new Date().toISOString().slice(0,10);
+    const prompt = [
+      "The image is a receipt or invoice, usually in Hebrew, from a household purchase in Israel.",
+      "Extract the purchase details and answer with ONE JSON object only, no other text:",
+      '{"date":"YYYY-MM-DD or null","total":number or null,"merchant":"short Hebrew business name or null","description":"short Hebrew description of what was bought, max 5 words, or null","category":one of ' + JSON.stringify(SHEET_CATEGORIES) + ' or null,"payment":"אשראי" | "מזומן" | null,"installments":integer >= 2 or null}',
+      "Rules: total is the final amount paid in shekels including VAT (סה\"כ לתשלום). Dates on Israeli receipts are day/month/year. If the year is missing assume the year of " + today + ".",
+      "installments only when the receipt explicitly shows payments (תשלומים) with a count. payment is אשראי when a card is shown, מזומן when cash is shown, otherwise null.",
+      "Choose the category by what was bought: groceries/supermarket = קניות מוצרי מזון לבית; fuel, car or motorcycle = דלק והוצאות רכב/אופנוע; restaurants, entertainment, leisure = מותרות; insurance = ביטוחים; utilities, bills, mortgage = משכנתא וחשבונות; anything else for the home or family = הוצאות נלוות לבית.",
+      "Use null for anything you cannot read with confidence."
+    ].join("\n");
+    try{
+      const r = await sample.json(prompt, { images: file, signal: ctl.signal, modelTier: "default" });
+      applyScan(r || {});
+    }catch(e){
+      if(e && e.code === "cancelled") return;
+      if(e && (e.code === "not_granted" || e.code === "sampling_disabled" || e.code === "images_unavailable" || e.code === "capability_disabled" || e.code === "not_declared")){
+        setStatus(ERR[e.code] || "הסריקה לא זמינה כאן.", true);
+        permanentOff = true;
+        return;
+      }
+      setStatus(ERR[e && e.code] || "הסריקה נכשלה. נסו שוב בעוד רגע.", true);
+    }finally{
+      if(!permanentOff) btn.classList.remove("busy");
+    }
+  });
+
+  function mark(el){ el.classList.add("scan-filled"); el.addEventListener("input", () => el.classList.remove("scan-filled"), { once:true }); }
+  function applyScan(r){
+    const filled = [];
+    if(typeof r.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(r.date)){
+      const el = document.getElementById("f-date"); el.value = r.date; mark(el); filled.push("תאריך");
+    }
+    const desc = [r.merchant, r.description].filter(x => typeof x === "string" && x.trim()).join(" – ");
+    if(desc){ const el = document.getElementById("f-desc"); el.value = desc.slice(0, 80); mark(el); filled.push("פירוט"); }
+    if(typeof r.category === "string" && SHEET_CATEGORIES.includes(r.category)){
+      const el = document.getElementById("f-cat"); el.value = r.category; el.dispatchEvent(new Event("change")); mark(el); filled.push("סיווג");
+    }
+    const inst = Number.isInteger(r.installments) && r.installments >= 2 && r.installments <= 60 ? r.installments : null;
+    const pay = document.getElementById("f-pay");
+    if(inst){ pay.value = "אשראי תשלומים"; document.getElementById("f-inst").value = String(inst); mark(pay); filled.push("תשלומים"); }
+    else if(r.payment === "אשראי" || r.payment === "מזומן"){ pay.value = r.payment; mark(pay); filled.push("אמצעי תשלום"); }
+    const total = typeof r.total === "number" ? r.total : parseFloat(r.total);
+    if(total > 0){ const el = document.getElementById("f-amt"); el.value = String(Math.round(total * 100) / 100); mark(el); filled.push("סכום"); }
+    updateInstallmentUI();
+    if(filled.length){
+      setStatus("מולאו: " + filled.join(", ") + ". בדקו את השדות המסומנים ולחצו \"הוספת הוצאה\".");
+    } else {
+      setStatus("לא זוהו פרטים בתמונה. נסו תמונה ברורה יותר, או מלאו ידנית.", true);
+    }
+  }
+})();
 </script>
 </body>
 </html>
