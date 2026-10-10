@@ -1836,9 +1836,15 @@ window.addEventListener("load", () => {
   if(!sample){ unavailable("הסריקה לא זמינה כאן: האפליקציה לא קיבלה גישה ל-Claude. פתחו אותה ב-claude.ai כשאתם מחוברים, ובדקו בתפריט ההרשאות של ה-Artifact שהשימוש ב-Claude מאושר."); return; }
   try{ caps = await sample.limits(); }catch(e){ caps = null; }
   if(!caps){ unavailable("הסריקה לא זמינה כאן כרגע. נסו לרענן את הדף."); return; }
-  if(!caps.images){ unavailable("בתצוגה הזו אי אפשר לשלוח תמונות ל-Claude. נסו לפתוח את האפליקציה ב-claude.ai בדפדפן (Chrome) ולא דרך האפליקציה של Claude."); return; }
+  // אם אי אפשר לשלוח תמונות ל-Claude, Google Drive מחלץ את הטקסט מהתמונה ו-Claude מפענח את הטקסט
+  let mcp = null;
+  if(!caps.images){
+    try{ mcp = await claude.use("mcp"); }catch(e){ mcp = null; }
+    if(!mcp){ unavailable("הסריקה לא זמינה כאן: אין גישה ל-Google Drive. ודאו ש-Google Drive מחובר ב-claude.ai."); return; }
+  }
+  const useDrive = !caps.images;
   status.textContent = "צלמו חשבונית או קבלה, והפרטים יתמלאו בטופס לבדיקה לפני ההוספה.";
-  if(caps.images.mediaTypes && caps.images.mediaTypes.length) input.accept = caps.images.mediaTypes.join(",");
+  if(caps.images && caps.images.mediaTypes && caps.images.mediaTypes.length) input.accept = caps.images.mediaTypes.join(",");
 
   const setStatus = (text, isErr) => { status.textContent = text; status.classList.toggle("err", !!isErr); };
   const ERR = {
@@ -1858,7 +1864,7 @@ window.addEventListener("load", () => {
     const file = input.files && input.files[0];
     input.value = "";
     if(!file || permanentOff) return;
-    if(caps.images.maxInputBytes && file.size > caps.images.maxInputBytes){
+    if(!useDrive && caps.images.maxInputBytes && file.size > caps.images.maxInputBytes){
       setStatus("הקובץ גדול מדי. נסו תמונה קטנה יותר.", true); return;
     }
     if(ctl) ctl.abort();
@@ -1867,7 +1873,7 @@ window.addEventListener("load", () => {
     setStatus("קורא את החשבונית… זה לוקח כמה שניות.");
     const today = new Date().toISOString().slice(0,10);
     const prompt = [
-      "The image is a receipt or invoice, usually in Hebrew, from a household purchase in Israel.",
+      useDrive ? "Below is text extracted by OCR from a photo of a receipt or invoice, usually in Hebrew, from a household purchase in Israel. OCR may scramble line order or digits." : "The image is a receipt or invoice, usually in Hebrew, from a household purchase in Israel.",
       "Extract the purchase details and answer with ONE JSON object only, no other text:",
       '{"date":"YYYY-MM-DD or null","total":number or null,"merchant":"short Hebrew business name or null","description":"short Hebrew description of what was bought, max 5 words, or null","category":one of ' + JSON.stringify(SHEET_CATEGORIES) + ' or null,"payment":"אשראי" | "מזומן" | null,"installments":integer >= 2 or null}',
       "Rules: total is the final amount paid in shekels including VAT (סה\"כ לתשלום). Dates on Israeli receipts are day/month/year. If the year is missing assume the year of " + today + ".",
@@ -1876,7 +1882,16 @@ window.addEventListener("load", () => {
       "Use null for anything you cannot read with confidence."
     ].join("\n");
     try{
-      const r = await sample.json(prompt, { images: file, signal: ctl.signal, modelTier: "default" });
+      let r;
+      if(useDrive){
+        setStatus("מעלה את התמונה ל-Google Drive לקריאה…");
+        const text = await ocrViaDrive(file);
+        if(!text || text.trim().length < 5){ setStatus("לא נמצא טקסט בתמונה. נסו תמונה ברורה ומוארת יותר.", true); return; }
+        setStatus("מפענח את פרטי החשבונית…");
+        r = await sample.json(prompt + "\n\nOCR TEXT:\n" + text.slice(0, 12000), { signal: ctl.signal, modelTier: "default" });
+      } else {
+        r = await sample.json(prompt, { images: file, signal: ctl.signal, modelTier: "default" });
+      }
       applyScan(r || {});
     }catch(e){
       if(e && e.code === "cancelled") return;
@@ -1885,11 +1900,48 @@ window.addEventListener("load", () => {
         permanentOff = true;
         return;
       }
+      if(e && e.driveStep){ setStatus("הקריאה דרך Google Drive נכשלה (" + e.driveStep + "). נסו שוב, ואם זה חוזר ודאו ש-Google Drive מחובר ב-claude.ai.", true); return; }
       setStatus(ERR[e && e.code] || "הסריקה נכשלה. נסו שוב בעוד רגע.", true);
     }finally{
       if(!permanentOff) btn.classList.remove("busy");
     }
   });
+
+  // מקטין את התמונה (עד 1600 פיקסלים) ומחזיר JPEG ב-base64
+  async function toJpegBase64(file){
+    const bmp = await createImageBitmap(file);
+    const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+    const c = document.createElement("canvas");
+    c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
+    c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+    const blob = await new Promise(res => c.toBlob(res, "image/jpeg", 0.85));
+    const buf = new Uint8Array(await blob.arrayBuffer());
+    let bin = ""; for(let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+    return btoa(bin);
+  }
+  async function ocrViaDrive(file){
+    let fileId = null;
+    const fail = (step, e) => { const err = new Error(step); err.driveStep = step; err.cause = e; return err; };
+    let b64;
+    try{ b64 = await toJpegBase64(file); }catch(e){ throw fail("קריאת התמונה", e); }
+    try{
+      const res = await mcp.callTool("Google Drive", "create_file", {
+        title: "K9 סריקה זמנית " + new Date().toISOString().slice(0,19) + ".jpg",
+        base64Content: b64, contentMimeType: "image/jpeg", disableConversionToGoogleType: true
+      });
+      const pl = res && res.payload;
+      fileId = pl && (pl.id || (pl.file && pl.file.id));
+    }catch(e){ throw fail("העלאה", e); }
+    if(!fileId) throw fail("העלאה", null);
+    try{
+      const res = await mcp.callTool("Google Drive", "read_file_content", { fileId });
+      const pl = res && res.payload;
+      return (pl && (pl.fileContent || pl.content)) || "";
+    }catch(e){ throw fail("קריאת הטקסט", e); }
+    finally{
+      mcp.callTool("Google Drive", "trash_file", { fileId }).catch(() => {});
+    }
+  }
 
   function mark(el){ el.classList.add("scan-filled"); el.addEventListener("input", () => el.classList.remove("scan-filled"), { once:true }); }
   function applyScan(r){
