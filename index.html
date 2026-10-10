@@ -476,7 +476,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 
   <section class="panel" id="panel-add">
     <form class="entry-form" id="entryForm">
-      <div class="scan-box" id="scanBox" hidden>
+      <div class="scan-box" id="scanBox">
         <label class="scan-btn" for="f-scan">
           <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2M8 9h8M8 12h8M8 15h5"/></svg>
           סריקת חשבונית
@@ -1816,19 +1816,29 @@ window.addEventListener("load", () => {
 
 // ---- סריקת חשבונית: Claude קורא את התמונה וממלא את הטופס לבדיקה ----
 (async function initInvoiceScan(){
-  let sample = null, caps = null;
-  try{ sample = (typeof claude !== "undefined" && claude.use) ? await claude.use("sample") : null; }catch(e){ sample = null; }
-  if(!sample) return;
-  try{ caps = await sample.limits(); }catch(e){ caps = null; }
-  if(!caps || !caps.images) return;
   const box = document.getElementById("scanBox");
   const input = document.getElementById("f-scan");
   const status = document.getElementById("scanStatus");
   const btn = box.querySelector(".scan-btn");
-  if(caps.images.mediaTypes && caps.images.mediaTypes.length) input.accept = caps.images.mediaTypes.join(",");
   const syncVisibility = () => { box.hidden = currentType !== "expense"; };
   syncVisibility();
   document.querySelectorAll(".type-switch button").forEach(b => b.addEventListener("click", syncVisibility));
+  // הכפתור תמיד מוצג, ואם הסריקה לא זמינה בתצוגה הזו כתוב למה
+  const unavailable = (why) => {
+    btn.classList.add("busy");
+    input.disabled = true;
+    status.textContent = why;
+    status.classList.add("err");
+  };
+  status.textContent = "בודק אם הסריקה זמינה…";
+  let sample = null, caps = null;
+  try{ sample = (typeof claude !== "undefined" && claude.use) ? await claude.use("sample") : null; }catch(e){ sample = null; }
+  if(!sample){ unavailable("הסריקה לא זמינה כאן: האפליקציה לא קיבלה גישה ל-Claude. פתחו אותה ב-claude.ai כשאתם מחוברים, ובדקו בתפריט ההרשאות של ה-Artifact שהשימוש ב-Claude מאושר."); return; }
+  try{ caps = await sample.limits(); }catch(e){ caps = null; }
+  if(!caps){ unavailable("הסריקה לא זמינה כאן כרגע. נסו לרענן את הדף."); return; }
+  if(!caps.images){ unavailable("בתצוגה הזו אי אפשר לשלוח תמונות ל-Claude. נסו לפתוח את האפליקציה ב-claude.ai בדפדפן (Chrome) ולא דרך האפליקציה של Claude."); return; }
+  status.textContent = "צלמו חשבונית או קבלה, והפרטים יתמלאו בטופס לבדיקה לפני ההוספה.";
+  if(caps.images.mediaTypes && caps.images.mediaTypes.length) input.accept = caps.images.mediaTypes.join(",");
 
   const setStatus = (text, isErr) => { status.textContent = text; status.classList.toggle("err", !!isErr); };
   const ERR = {
