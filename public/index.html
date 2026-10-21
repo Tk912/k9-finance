@@ -6,6 +6,10 @@
 <title>K9 פיננסים</title>
 <link rel="icon" href="icon-192.png" type="image/png">
 <link rel="apple-touch-icon" href="icon-180.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<script src="k9-bridge.js"></script>
 <meta name="theme-color" content="#1F4A37">
 <meta name="apple-mobile-web-app-title" content="K9 פיננסים">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -1844,7 +1848,7 @@ window.addEventListener("load", () => {
   status.textContent = "בודק אם הסריקה זמינה…";
   let sample = null, caps = null;
   try{ sample = (typeof claude !== "undefined" && claude.use) ? await claude.use("sample") : null; }catch(e){ sample = null; }
-  if(!sample){ unavailable("הסריקה לא זמינה כאן: האפליקציה לא קיבלה גישה ל-Claude. פתחו אותה ב-claude.ai כשאתם מחוברים, ובדקו בתפריט ההרשאות של ה-Artifact שהשימוש ב-Claude מאושר."); return; }
+  if(!sample){ unavailable("הסריקה לא זמינה: בשרת לא הוגדר מפתח API של Claude (ANTHROPIC_API_KEY)."); return; }
   try{ caps = await sample.limits(); }catch(e){ caps = null; }
   if(!caps){ unavailable("הסריקה לא זמינה כאן כרגע. נסו לרענן את הדף."); return; }
   // אם אי אפשר לשלוח תמונות ל-Claude, Google Drive מחלץ את הטקסט מהתמונה ו-Claude מפענח את הטקסט
