@@ -1,3 +1,4 @@
+[README.md](https://github.com/user-attachments/files/33900896/README.md)
 # K9 פיננסים — שרת
 
 דשבורד ההכנסות וההוצאות של הבית, כאתר עצמאי שרץ על Google Cloud Run.
@@ -10,7 +11,7 @@
 |---|---|
 | `public/index.html` | האפליקציה עצמה (אותה אפליקציה שהייתה ב-claude.ai) |
 | `public/k9-bridge.js` | מחבר את האפליקציה לשרת במקום לחיבורים של claude.ai |
-| `server.js` | השרת: סיסמת כניסה, קריאת הגיליון מ-Google, סריקת קבלות עם Claude |
+| `server.js` | השרת: התחברות עם חשבון Google (רק מיילים מורשים), קריאת הגיליון מ-Google, סריקת קבלות עם Claude |
 | `Dockerfile` | הוראות הבנייה ל-Cloud Run |
 | `apps-script/Code.gs` | ה-Apps Script שרושם רשומות חדשות לגיליון (פרוס בנפרד ב-Google Apps Script, לא חלק מהשרת) |
 
@@ -20,7 +21,8 @@
 
 | משתנה | חובה | מה זה |
 |---|---|---|
-| `APP_PASSWORD` | כן | סיסמת הכניסה המשפחתית |
+| `GOOGLE_CLIENT_ID` | כן | מזהה ה-OAuth Client להתחברות עם Google (נגמר ב-`.apps.googleusercontent.com`) |
+| `ALLOWED_EMAILS` | כן | המיילים שמורשים להיכנס, מופרדים בנקודה-פסיק: `a@gmail.com;b@gmail.com` |
 | `SESSION_SECRET` | כן | מחרוזת אקראית ארוכה (שומרת על ההתחברות בין הפעלות) |
 | `SHEET_FILE_ID` | לא | מזהה הגיליון (ברירת מחדל: הגיליון הנוכחי) |
 | `ANTHROPIC_API_KEY` | לא | מפתח ל-Claude API. בלעדיו סריקת קבלות כבויה, כל השאר עובד |
@@ -58,19 +60,26 @@ echo $SA
 
 **שתפו את הגיליון המשפחתי עם הכתובת שהודפסה** (כפתור "שיתוף" בגיליון ← מדביקים את הכתובת ← הרשאת **צפייה** ← מבטלים את "שליחת הודעה").
 
-### 3. סודות (סיסמה ומפתחות)
+### 3. סודות (מפתחות)
 
 ```bash
-printf 'הסיסמה-שבחרתם' | gcloud secrets create k9-app-password --data-file=-
 openssl rand -hex 32 | tr -d '\n' | gcloud secrets create k9-session-secret --data-file=-
 # אופציונלי, לסריקת קבלות (מפתח מ-console.anthropic.com):
 printf 'sk-ant-...' | gcloud secrets create k9-anthropic-key --data-file=-
 
-for s in k9-app-password k9-session-secret k9-anthropic-key; do
+for s in k9-session-secret k9-anthropic-key; do
   gcloud secrets add-iam-policy-binding $s --member=serviceAccount:$SA --role=roles/secretmanager.secretAccessor
 done
 # (אם לא יצרתם את k9-anthropic-key, השגיאה עליו בלולאה תקינה)
 ```
+
+### 3א. התחברות עם Google (OAuth Client)
+
+1. ב-Console: **APIs & Services ← OAuth consent screen** (או Google Auth Platform ← Branding). סוג משתמשים **External**, שם האפליקציה `K9 פיננסים`, המייל שלכם. בלשונית **Audience** לוחצים **Publish app** (להרשאות הבסיסיות של שם ומייל לא צריך אישור של גוגל). הגישה בפועל מוגבלת ע״י `ALLOWED_EMAILS`.
+2. **APIs & Services ← Credentials ← Create credentials ← OAuth client ID**, סוג **Web application**:
+   - **Authorized JavaScript origins:** `https://k9-finance-xxxx.me-west1.run.app` (כתובת האתר, בלי `/` בסוף)
+   - **Authorized redirect URIs:** `https://k9-finance-xxxx.me-west1.run.app/login/google`
+3. מעתיקים את ה-**Client ID**. הוא לא סודי, נכנס כמשתנה סביבה רגיל.
 
 ### 4. הורדת הקוד והעלאה
 
@@ -82,13 +91,25 @@ gcloud run deploy k9-finance --source . \
   --service-account $SA \
   --allow-unauthenticated \
   --max-instances 1 --memory 512Mi \
-  --set-secrets APP_PASSWORD=k9-app-password:latest,SESSION_SECRET=k9-session-secret:latest,ANTHROPIC_API_KEY=k9-anthropic-key:latest
+  --set-env-vars "GOOGLE_CLIENT_ID=xxxx.apps.googleusercontent.com,ALLOWED_EMAILS=a@gmail.com;b@gmail.com" \
+  --set-secrets SESSION_SECRET=k9-session-secret:latest,ANTHROPIC_API_KEY=k9-anthropic-key:latest
 ```
 
 (בלי סריקת קבלות: מורידים את `,ANTHROPIC_API_KEY=...` מהשורה האחרונה.)
 
 בסוף מודפסת כתובת בסגנון `https://k9-finance-xxxx.me-west1.run.app` — זה האתר.
-`me-west1` הוא אזור תל אביב. `--allow-unauthenticated` אומר שגוגל לא חוסם את הכניסה; את ההגנה עושה סיסמת האפליקציה.
+`me-west1` הוא אזור תל אביב. `--allow-unauthenticated` אומר שגוגל לא חוסם את הכניסה; את ההגנה עושה ההתחברות עם Google באפליקציה.
+
+בפעם הראשונה הכתובת עדיין לא ידועה: מריצים deploy, מקבלים כתובת, משלימים את שלב 3א עם הכתובת, ומעדכנים את המשתנים (ראו למטה).
+
+**הוספה או הסרה של מורשים:**
+
+```bash
+gcloud run services update k9-finance --region me-west1 \
+  --update-env-vars "ALLOWED_EMAILS=a@gmail.com;b@gmail.com;c@gmail.com"
+```
+
+מי שהוסר מהרשימה מנותק מיד, גם אם כבר היה מחובר.
 
 ### 5. עדכונים בהמשך
 
