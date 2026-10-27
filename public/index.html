@@ -337,6 +337,14 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 .scan-status{font-size:13px;color:var(--ink-soft);line-height:1.6}
 .scan-status.err{color:var(--rust)}
 .scan-filled{outline:2px solid var(--gold);outline-offset:1px}
+.send-all-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.send-all-btn{font-family:var(--font-body);font-size:15px;font-weight:700;background:var(--forest);color:var(--card);border:1px solid var(--forest-deep);border-radius:8px;padding:9px 16px;cursor:pointer}
+.send-all-btn:hover{background:var(--forest-deep)}
+.send-all-btn:disabled{opacity:.6;cursor:default}
+.send-all-btn:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.send-all-status{font-size:13px;color:var(--ink-soft)}
+.send-all-status.err{color:var(--rust)}
+.pending-err{flex-basis:100%;font-size:12px;color:var(--rust)}
 </style>
 </head>
 <body>
@@ -550,6 +558,10 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     <div class="footer-note" id="pendingExportBox" style="margin-top:22px; max-width:480px; display:none;">
       <h3 style="margin:0 0 8px; font-family:var(--font-head); font-size:16px; color:var(--ink);">רשומות ממתינות לרישום בגיליון (<span id="pendingCount">0</span>)</h3>
       <div class="count-note" style="margin-bottom:8px;">לחצו "רשום בגיליון" ליד כל רשומה. תיפתח לשונית שמאשרת את הרישום (✅). אם מופיע ⚠️, אפשר להעתיק את הרשומה ולהדביק אותה בגיליון ידנית.</div>
+      <div class="send-all-row" id="sendAllRow" style="display:none;">
+        <button type="button" class="send-all-btn" id="sendAllBtn">רשום את כולן בגיליון</button>
+        <span class="send-all-status" id="sendAllStatus" aria-live="polite"></span>
+      </div>
       <div id="pendingList" style="font-size:13px; line-height:1.9; white-space:pre-wrap; background:var(--paper-2); border:1px solid var(--line); border-radius:8px; padding:10px; margin-bottom:10px; max-height:220px; overflow:auto;"></div>
       <div class="form-actions">
         <button type="button" class="btn" id="copyPendingBtn">העתק ללוח</button>
@@ -1460,6 +1472,9 @@ function renderPendingExport(){
   countEl.textContent = pendingExport.length;
   if(pendingExport.length === 0){ box.style.display = "none"; return; }
   box.style.display = "block";
+  const sendAllRow = document.getElementById("sendAllRow");
+  sendAllRow.style.display = pendingExport.length >= 2 ? "flex" : "none";
+  if(!sendAllBusy) document.getElementById("sendAllBtn").textContent = "רשום את כל ה-" + pendingExport.length + " בגיליון";
   list.textContent = "";
   pendingExport.forEach(rec => {
     const row = document.createElement("div");
@@ -1487,9 +1502,80 @@ function renderPendingExport(){
     });
     row.appendChild(txt);
     row.appendChild(a);
+    if(sendAllErrors[rec.id]){
+      const err = document.createElement("div");
+      err.className = "pending-err";
+      err.textContent = "⚠️ " + sendAllErrors[rec.id];
+      row.appendChild(err);
+    }
     list.appendChild(row);
   });
 }
+
+// ---- רישום כל הרשומות הממתינות בבת אחת ----
+// השרת פונה בעצמו ל-Apps Script, רשומה אחר רשומה, בלי לפתוח לשוניות.
+// הסקריפט מונע כפילויות לפי מזהה הרשומה, כך שגם שליחה חוזרת בטוחה.
+let sendAllBusy = false;
+let sendAllErrors = {};
+function markSent(id){
+  records.forEach(r => { if(r.id === id) r.sentToSheet = true; });
+  pendingExport = pendingExport.filter(r => r.id !== id);
+  delete sendAllErrors[id];
+}
+async function sendAllPending(){
+  if(sendAllBusy || pendingExport.length === 0) return;
+  const btn = document.getElementById("sendAllBtn");
+  const status = document.getElementById("sendAllStatus");
+  sendAllBusy = true;
+  btn.disabled = true;
+  status.classList.remove("err");
+  const batch = pendingExport.slice();
+  let okCount = 0, failCount = 0;
+  sendAllErrors = {};
+  try{
+    for(let i = 0; i < batch.length; i++){
+      const rec = batch[i];
+      btn.textContent = "רושם " + (i + 1) + " מתוך " + batch.length + "…";
+      let result;
+      try{
+        const resp = await fetch("/api/sheet-write", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: sheetWriteUrl(rec) })
+        });
+        if(resp.status === 401){ location.href = "/login"; return; }
+        result = await resp.json();
+      }catch(e){
+        result = { ok: false, message: "אין חיבור לשרת" };
+      }
+      if(result && result.ok === true){
+        markSent(rec.id);
+        okCount++;
+      } else {
+        failCount++;
+        sendAllErrors[rec.id] = (result && result.message) ||
+          (result && result.ok === null ? "לא ברור אם נרשם. לחצו \"רשום בגיליון\" ליד הרשומה כדי לבדוק (לא תיווצר כפילות)." : "הרישום נכשל");
+      }
+      saveRecords(records);
+      savePending(pendingExport);
+      renderPendingExport();
+    }
+  } finally {
+    sendAllBusy = false;
+    btn.disabled = false;
+    renderPendingExport();
+  }
+  if(failCount){
+    status.textContent = (okCount ? "נרשמו " + okCount + ". " : "") + failCount + " לא נרשמו, הפירוט ליד כל רשומה.";
+    status.classList.add("err");
+    showToast(status.textContent);
+  } else {
+    status.textContent = "";
+    showToast("כל " + okCount + " הרשומות נרשמו בגיליון ✅");
+  }
+}
+document.getElementById("sendAllBtn").addEventListener("click", sendAllPending);
 
 async function copyPendingToClipboard(){
   const text = pendingExport.map(pendingLineFor).join("\n");

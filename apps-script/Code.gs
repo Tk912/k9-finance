@@ -8,7 +8,7 @@
  *        Execute as: Me · Who has access: Anyone
  */
 
-const SCRIPT_VERSION = "v5";
+const SCRIPT_VERSION = "v6";
 const TOKEN = "k9-eSxNZUqsW__u2KnNLMp38a_v";
 const SHEET_ID = "1gLA2t9RToM5N-LhdSSqEufR3pGdTN8ouT8Yu_Pa0o3U";
 
@@ -32,7 +32,7 @@ function doGet(e) {
       // מניעת כפילות: אם הלשונית נטענה שוב, לא רושמים פעמיים
       const props = PropertiesService.getScriptProperties();
       if (p.id && props.getProperty("done_" + p.id)) {
-        return page_(true, "הרשומה כבר נרשמה בגיליון קודם לכן.");
+        return respond_(p, true, "הרשומה כבר נרשמה בגיליון קודם לכן.");
       }
 
       const amount = parseFloat(p.amt);
@@ -58,12 +58,12 @@ function doGet(e) {
       if (p.id) props.setProperty("done_" + p.id, "1");
       let msg = "נרשם בלשונית \"" + sh.getName() + "\" בשורה " + where + ".";
       if (WARN.length) msg += " שימו לב: " + WARN.join(" ");
-      return page_(true, msg);
+      return respond_(p, true, msg);
     } finally {
       lock.releaseLock();
     }
   } catch (err) {
-    return page_(false, err.message);
+    return respond_(p, false, err.message);
   }
 }
 
@@ -266,6 +266,15 @@ function addIncome_(sh, dateText, src, amount) {
   const colLetter = sh.getRange(1, aCol).getA1Notation().replace(/[0-9]/g, "");
   appendRefToFormula_(sh.getRange(totalRow, aCol), colLetter + row);
   return row;
+}
+
+// format=json: answer for the K9 server ("send all"), instead of the HTML page for a browser tab
+function respond_(p, ok, msg) {
+  if (p && p.format === "json") {
+    return ContentService.createTextOutput(JSON.stringify({ ok: ok, message: msg, version: SCRIPT_VERSION }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+  return page_(ok, msg);
 }
 
 function page_(ok, msg) {

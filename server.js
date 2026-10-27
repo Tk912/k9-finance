@@ -201,6 +201,57 @@ app.get("/api/sheet", async (req, res) => {
   }
 });
 
+// ---------- writing a record to the sheet through the Apps Script web app ----------
+// The app builds the Apps Script link for each record (the same link it opens in a
+// new tab). For "send all" the server calls that link itself, one record at a time.
+const APPS_SCRIPT_LINK = /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec\?/;
+
+// Turns \uXXXX / \xXX escapes and HTML entities back into text, so the result
+// page can be read whether the script answered in JSON or in its HTML page.
+function decodeScriptPage(s) {
+  return String(s)
+    .replace(/\\u([0-9a-fA-F]{4})/g, (m, h) => String.fromCharCode(parseInt(h, 16)))
+    .replace(/\\x([0-9a-fA-F]{2})/g, (m, h) => String.fromCharCode(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (m, d) => String.fromCharCode(Number(d)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (m, h) => String.fromCharCode(parseInt(h, 16)))
+    .replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+}
+
+// -> { ok: true|false|null, message }   (null = could not tell from the answer)
+function readScriptResult(body) {
+  try {
+    const j = JSON.parse(body);
+    if (j && typeof j.ok === "boolean") return { ok: j.ok, message: String(j.message || "") };
+  } catch (e) { /* older script version answers with an HTML page */ }
+  const text = decodeScriptPage(body);
+  const msgMatch = text.match(/<p style="font-size:16px">([\s\S]*?)<\/p>/);
+  const message = msgMatch ? decodeScriptPage(msgMatch[1]).trim() : "";
+  if (text.includes("נרשם ✓") || text.includes("נרשם בגיליון")) return { ok: true, message };
+  if (text.includes("הרישום נכשל") || text.includes("שגיאה ·")) return { ok: false, message };
+  return { ok: null, message: "" };
+}
+
+app.post("/api/sheet-write", async (req, res) => {
+  const link = String((req.body && req.body.url) || "");
+  if (!APPS_SCRIPT_LINK.test(link)) return res.status(400).json({ code: "bad_request", message: "קישור לא תקין" });
+  const url = new URL(link);
+  url.searchParams.set("format", "json");
+  try {
+    const r = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(60e3) });
+    const body = await r.text();
+    if (!r.ok) {
+      console.error("sheet write: script answered", r.status);
+      return res.json({ ok: false, message: "הסקריפט של הגיליון החזיר שגיאה (" + r.status + ")" });
+    }
+    const result = readScriptResult(body);
+    if (result.ok === null) console.warn("sheet write: unrecognised answer", body.slice(0, 300));
+    res.json(result);
+  } catch (e) {
+    console.error("sheet write failed:", e && e.message);
+    res.json({ ok: false, message: "לא הצלחנו להגיע לסקריפט של הגיליון" });
+  }
+});
+
 // Receipt parsing: prompt (+ optional image) -> one JSON object from Claude
 app.post("/api/sample", async (req, res) => {
   if (!ANTHROPIC_API_KEY) return res.status(503).json({ code: "sampling_disabled" });
